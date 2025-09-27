@@ -1,6 +1,46 @@
 import { Hono } from "hono";
 import type { Env } from "./.env.d";
-import OpenAI from "openai";
+// Cloudflare Worker compatible OpenAI import
+import OpenAI from "openai-edge";
+type GeminiGenerateParams = {
+  model: string;
+  contents: Array<{ role: string; parts: Array<{ text: string }> }>;
+  temperature?: number;
+  maxOutputTokens?: number;
+};
+
+async function callGeminiAPI(
+  env: Env,
+  params: GeminiGenerateParams
+): Promise<{ content: string } | { error: string }> {
+  // Gemini API endpoint and key must be provided in env
+  const apiKey = env.GEMINI_API_KEY;
+  if (!apiKey) return { error: "Gemini API key not configured" };
+  try {
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(params)
+      }
+    );
+    if (!response.ok) {
+      return { error: `Gemini error: ${response.status}` };
+    }
+    const data = await response.json();
+    // Gemini returns candidates[0].content.parts[0].text
+    const text =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      data?.candidates?.[0]?.content?.parts?.[0] ||
+      "";
+    return { content: text };
+  } catch (error: any) {
+    return { error: "Gemini API call failed" };
+  }
+}
 
 import {
   CreateResumeSchema,
@@ -12,6 +52,7 @@ import {
 } from "@/shared/types";
 import { zValidator } from "@hono/zod-validator";
 import { cors } from "hono/cors";
+import console from "console";
 
 const app = new Hono<{ Bindings: Env }>();
 app.use("*", cors());
@@ -23,13 +64,10 @@ function getOpenAIClient(env: Env) {
   });
 }
 
-// Resume generation endpoint
+// Resume generation endpoint (Gemini + OpenAI fallback)
 app.post("/api/resume/generate", zValidator("json", CreateResumeSchema), async (c) => {
-  try {
-    const data = c.req.valid("json");
-    const openai = getOpenAIClient(c.env);
-
-    const prompt = `Generate a professional resume based on the following information:
+  const data = c.req.valid("json");
+  const prompt = `Generate a professional resume based on the following information:
 
 Personal Information:
 - Name: ${data.personalInfo.name}
@@ -47,39 +85,70 @@ ${data.education.map(edu => `- ${edu.degree} from ${edu.institution} (${edu.year
 Skills: ${data.skills.join(', ')}
 
 Please format this as a professional resume with clear sections and compelling language that highlights achievements and impact.`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are a professional resume writer with expertise in creating compelling resumes that get results. Format the resume with clear sections and use action verbs and quantifiable achievements where possible."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 1500,
-      temperature: 0.7,
-    });
-
-    const resumeContent = completion.choices[0]?.message?.content || "Failed to generate resume content";
-
+  // Try Gemini first
+  const geminiParams: GeminiGenerateParams = {
+    model: "gemini-pro",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ],
+    temperature: 0.7,
+    maxOutputTokens: 1500,
+  };
+  let resumeContent: string | undefined;
+  let aiError: string | undefined = undefined;
+  let usedModel: string = "gemini";
+  const systemPrompt =
+    "You are a professional resume writer with expertise in creating compelling resumes that get results. Format the resume with clear sections and use action verbs and quantifiable achievements where possible.";
+  // Gemini does not support system prompt, so prepend to prompt.
+  geminiParams.contents[0].parts[0].text = `${systemPrompt}\n\n${prompt}`;
+  const geminiResult = await callGeminiAPI(c.env, geminiParams);
+  if ("content" in geminiResult && geminiResult.content.trim()) {
+    resumeContent = geminiResult.content;
+  } else {
+    // Fallback to OpenAI
+    usedModel = "openai";
+    try {
+      const openai = getOpenAIClient(c.env);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 1500,
+        temperature: 0.7,
+      });
+      resumeContent = completion.choices[0]?.message?.content || "Failed to generate resume content";
+    } catch (err: any) {
+      aiError = "Failed to generate resume";
+      resumeContent = "Failed to generate resume content";
+    }
+  }
+  try {
     // Store in database
     const dbResult = await c.env.DB.prepare(
       "INSERT INTO resumes (user_id, title, content, formatted_content, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
     ).bind(
-      'user_temp', // TODO: Replace with actual user ID when auth is implemented
+      'user_temp',
       `${data.personalInfo.name} - Resume`,
       JSON.stringify(data),
       resumeContent
     ).run();
-
     return c.json({
       id: dbResult.meta.last_row_id,
       content: resumeContent,
-      success: true
+      usedModel,
+      success: !aiError,
+      error: aiError
     });
   } catch (error) {
     console.error("Resume generation error:", error);
@@ -87,19 +156,15 @@ Please format this as a professional resume with clear sections and compelling l
   }
 });
 
-// Cover letter generation endpoint
+// Cover letter generation endpoint (Gemini + OpenAI fallback)
 app.post("/api/cover-letter/generate", zValidator("json", CreateCoverLetterSchema), async (c) => {
-  try {
-    const data = c.req.valid("json");
-    const openai = getOpenAIClient(c.env);
-
-    const toneInstructions = {
-      professional: "Use a formal, professional tone",
-      enthusiastic: "Use an enthusiastic and energetic tone",
-      creative: "Use a creative and engaging tone"
-    };
-
-    const prompt = `Write a compelling cover letter for the following job application:
+  const data = c.req.valid("json");
+  const toneInstructions = {
+    professional: "Use a formal, professional tone",
+    enthusiastic: "Use an enthusiastic and energetic tone",
+    creative: "Use a creative and engaging tone"
+  };
+  const prompt = `Write a compelling cover letter for the following job application:
 
 Job Title: ${data.jobTitle}
 Company: ${data.companyName}
@@ -110,39 +175,68 @@ Applicant's Experience/Background: ${data.personalExperience}
 Tone: ${toneInstructions[data.tone]}
 
 Create a personalized cover letter that highlights relevant experience, shows enthusiasm for the role, and demonstrates knowledge of the company. The letter should be professional, concise, and compelling.`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert career coach and professional writer specializing in creating compelling cover letters that get interviews. Write personalized, engaging cover letters that highlight the candidate's strengths and fit for the role."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 1000,
-      temperature: 0.7,
-    });
-
-    const coverLetterContent = completion.choices[0]?.message?.content || "Failed to generate cover letter content";
-
+  const systemPrompt =
+    "You are an expert career coach and professional writer specializing in creating compelling cover letters that get interviews. Write personalized, engaging cover letters that highlight the candidate's strengths and fit for the role.";
+  // Try Gemini first
+  const geminiParams: GeminiGenerateParams = {
+    model: "gemini-pro",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${systemPrompt}\n\n${prompt}` }]
+      }
+    ],
+    temperature: 0.7,
+    maxOutputTokens: 1000,
+  };
+  let coverLetterContent: string | undefined;
+  let aiError: string | undefined = undefined;
+  let usedModel: string = "gemini";
+  const geminiResult = await callGeminiAPI(c.env, geminiParams);
+  if ("content" in geminiResult && geminiResult.content.trim()) {
+    coverLetterContent = geminiResult.content;
+  } else {
+    // Fallback to OpenAI
+    usedModel = "openai";
+    try {
+      const openai = getOpenAIClient(c.env);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 1000,
+        temperature: 0.7,
+      });
+      coverLetterContent = completion.choices[0]?.message?.content || "Failed to generate cover letter content";
+    } catch (err: any) {
+      aiError = "Failed to generate cover letter";
+      coverLetterContent = "Failed to generate cover letter content";
+    }
+  }
+  try {
     // Store in database
-    const dbResult = await c.env.DB.prepare( 
+    const dbResult = await c.env.DB.prepare(
       "INSERT INTO cover_letters (user_id, job_title, company_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
     ).bind(
-      'user_temp', // TODO: Replace with actual user ID when auth is implemented
+      'user_temp',
       data.jobTitle,
       data.companyName,
       coverLetterContent
     ).run();
-
     return c.json({
       id: dbResult.meta.last_row_id,
       content: coverLetterContent,
-      success: true
+      usedModel,
+      success: !aiError,
+      error: aiError
     });
   } catch (error) {
     console.error("Cover letter generation error:", error);
@@ -150,35 +244,63 @@ Create a personalized cover letter that highlights relevant experience, shows en
   }
 });
 
-// Career coaching chat endpoint
+// Career coaching chat endpoint (Gemini + OpenAI fallback)
 app.post("/api/coaching/chat", zValidator("json", CoachingMessageSchema), async (c) => {
+  const message = c.req.valid("json");
+  const systemPrompt =
+    "You are Coach Leo, an expert career coach with years of experience helping professionals advance their careers. You provide personalized advice on career development, job search strategies, interview preparation, salary negotiation, and professional growth. Be supportive, actionable, and encouraging in your responses.";
+  // Try Gemini first
+  const geminiParams: GeminiGenerateParams = {
+    model: "gemini-pro",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${systemPrompt}\n\n${message.content}` }]
+      }
+    ],
+    temperature: 0.8,
+    maxOutputTokens: 800,
+  };
+  let response: string | undefined;
+  let aiError: string | undefined = undefined;
+  let usedModel: string = "gemini";
+  const geminiResult = await callGeminiAPI(c.env, geminiParams);
+  if ("content" in geminiResult && geminiResult.content.trim()) {
+    response = geminiResult.content;
+  } else {
+    // Fallback to OpenAI
+    usedModel = "openai";
+    try {
+      const openai = getOpenAIClient(c.env);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          {
+            role: "user",
+            content: message.content
+          }
+        ],
+        max_tokens: 800,
+        temperature: 0.8,
+      });
+      response = completion.choices[0]?.message?.content || "I apologize, but I'm having trouble generating a response right now. Please try again.";
+    } catch (err: any) {
+      aiError = "Failed to get coaching response";
+      response = "I apologize, but I'm having trouble generating a response right now. Please try again.";
+    }
+  }
   try {
-    const message = c.req.valid("json");
-    const openai = getOpenAIClient(c.env);
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are Coach Leo, an expert career coach with years of experience helping professionals advance their careers. You provide personalized advice on career development, job search strategies, interview preparation, salary negotiation, and professional growth. Be supportive, actionable, and encouraging in your responses."
-        },
-        {
-          role: "user",
-          content: message.content
-        }
-      ],
-      max_tokens: 800,
-      temperature: 0.8,
-    });
-
-    const response = completion.choices[0]?.message?.content || "I apologize, but I'm having trouble generating a response right now. Please try again.";
-
     return c.json({
       role: "assistant",
       content: response,
+      usedModel,
       timestamp: new Date().toISOString(),
-      success: true
+      success: !aiError,
+      error: aiError
     });
   } catch (error) {
     console.error("Coaching chat error:", error);
@@ -212,13 +334,10 @@ app.get("/api/cover-letters", async (c) => {
   }
 });
 
-// ATS Resume Analysis endpoint
+// ATS Resume Analysis endpoint (Gemini + OpenAI fallback)
 app.post("/api/ats/analyze", zValidator("json", ATSAnalysisRequestSchema), async (c) => {
-  try {
-    const { jobDescription, resume } = c.req.valid("json");
-    const openai = getOpenAIClient(c.env);
-
-    const prompt = `Analyze this resume against the job description for ATS (Applicant Tracking System) compatibility:
+  const { jobDescription, resume } = c.req.valid("json");
+  const prompt = `Analyze this resume against the job description for ATS (Applicant Tracking System) compatibility:
 
 JOB DESCRIPTION:
 ${jobDescription}
@@ -243,28 +362,57 @@ Format your response as JSON with the following structure:
   "recommendations": ["recommendation1", "recommendation2"],
   "optimizedResume": "full optimized resume text"
 }`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert ATS and resume optimization specialist. Analyze resumes for keyword density, ATS compatibility, and provide actionable improvements. Always respond with valid JSON."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 2000,
-      temperature: 0.3,
-    });
-
-    const responseText = completion.choices[0]?.message?.content || "";
-    
+  const systemPrompt =
+    "You are an expert ATS and resume optimization specialist. Analyze resumes for keyword density, ATS compatibility, and provide actionable improvements. Always respond with valid JSON.";
+  // Try Gemini first
+  const geminiParams: GeminiGenerateParams = {
+    model: "gemini-pro",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${systemPrompt}\n\n${prompt}` }]
+      }
+    ],
+    temperature: 0.3,
+    maxOutputTokens: 2000,
+  };
+  let responseText: string = "";
+  let usedModel: string = "gemini";
+  let aiError: string | undefined = undefined;
+  const geminiResult = await callGeminiAPI(c.env, geminiParams);
+  if ("content" in geminiResult && geminiResult.content.trim()) {
+    responseText = geminiResult.content;
+  } else {
+    // Fallback to OpenAI
+    usedModel = "openai";
     try {
-      const analysisResult = JSON.parse(responseText);
-      return c.json(analysisResult);
+      const openai = getOpenAIClient(c.env);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 2000,
+        temperature: 0.3,
+      });
+      responseText = completion.choices[0]?.message?.content || "";
+    } catch (err: any) {
+      aiError = "Failed to analyze ATS compatibility";
+      responseText = "";
+    }
+  }
+  try {
+    let analysisResult;
+    try {
+      analysisResult = JSON.parse(responseText);
+      return c.json({ ...analysisResult, usedModel, error: aiError });
     } catch (parseError) {
       // Fallback if JSON parsing fails
       return c.json({
@@ -273,7 +421,9 @@ Format your response as JSON with the following structure:
         missingKeywords: ["relevant keywords", "industry terms"],
         foundKeywords: ["experience", "skills", "education"],
         recommendations: ["Add more relevant keywords from the job description", "Improve formatting for ATS readability"],
-        optimizedResume: "Please resubmit for a complete optimized version"
+        optimizedResume: "Please resubmit for a complete optimized version",
+        usedModel,
+        error: aiError || "AI response could not be parsed as JSON"
       });
     }
   } catch (error) {
@@ -282,13 +432,10 @@ Format your response as JSON with the following structure:
   }
 });
 
-// LinkedIn Profile Optimization endpoint
+// LinkedIn Profile Optimization endpoint (Gemini + OpenAI fallback)
 app.post("/api/linkedin/optimize", zValidator("json", LinkedInOptimizationRequestSchema), async (c) => {
-  try {
-    const data = c.req.valid("json");
-    const openai = getOpenAIClient(c.env);
-
-    const prompt = `Optimize this LinkedIn profile for better visibility and professional impact:
+  const data = c.req.valid("json");
+  const prompt = `Optimize this LinkedIn profile for better visibility and professional impact:
 
 CURRENT PROFILE:
 Headline: ${data.currentProfile.headline}
@@ -315,28 +462,57 @@ Format as JSON:
   "recommendations": ["rec1", "rec2"],
   "contentStrategy": ["strategy1", "strategy2"]
 }`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are a LinkedIn optimization expert and personal branding specialist. Create compelling, professional profiles that attract recruiters and opportunities. Always respond with valid JSON."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 1500,
-      temperature: 0.4,
-    });
-
-    const responseText = completion.choices[0]?.message?.content || "";
-    
+  const systemPrompt =
+    "You are a LinkedIn optimization expert and personal branding specialist. Create compelling, professional profiles that attract recruiters and opportunities. Always respond with valid JSON.";
+  // Try Gemini first
+  const geminiParams: GeminiGenerateParams = {
+    model: "gemini-pro",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${systemPrompt}\n\n${prompt}` }]
+      }
+    ],
+    temperature: 0.4,
+    maxOutputTokens: 1500,
+  };
+  let responseText: string = "";
+  let usedModel: string = "gemini";
+  let aiError: string | undefined = undefined;
+  const geminiResult = await callGeminiAPI(c.env, geminiParams);
+  if ("content" in geminiResult && geminiResult.content.trim()) {
+    responseText = geminiResult.content;
+  } else {
+    // Fallback to OpenAI
+    usedModel = "openai";
     try {
-      const optimizationResult = JSON.parse(responseText);
-      return c.json(optimizationResult);
+      const openai = getOpenAIClient(c.env);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 1500,
+        temperature: 0.4,
+      });
+      responseText = completion.choices[0]?.message?.content || "";
+    } catch (err: any) {
+      aiError = "Failed to optimize LinkedIn profile";
+      responseText = "";
+    }
+  }
+  try {
+    let optimizationResult;
+    try {
+      optimizationResult = JSON.parse(responseText);
+      return c.json({ ...optimizationResult, usedModel, error: aiError });
     } catch (parseError) {
       // Fallback if JSON parsing fails
       return c.json({
@@ -344,7 +520,9 @@ Format as JSON:
         optimizedSummary: "Optimized summary would appear here with relevant keywords and compelling narrative that showcases your value proposition and career achievements.",
         suggestedSkills: ["Leadership", "Strategic Planning", "Data Analysis", "Project Management"],
         recommendations: ["Add a professional headshot", "Engage with industry content regularly", "Connect with industry professionals"],
-        contentStrategy: ["Share industry insights and trends", "Comment thoughtfully on posts", "Publish articles about your expertise"]
+        contentStrategy: ["Share industry insights and trends", "Comment thoughtfully on posts", "Publish articles about your expertise"],
+        usedModel,
+        error: aiError || "AI response could not be parsed as JSON"
       });
     }
   } catch (error) {
@@ -353,20 +531,16 @@ Format as JSON:
   }
 });
 
-// Interview Simulation endpoints
+// Interview Simulation endpoint (Gemini + OpenAI fallback)
 app.post("/api/interview/start", zValidator("json", StartInterviewSchema), async (c) => {
-  try {
-    const data = c.req.valid("json");
-    const openai = getOpenAIClient(c.env);
-
-    const interviewTypePrompts = {
-      behavioral: "behavioral interview questions using the STAR method",
-      technical: "technical questions relevant to the role",
-      case: "case study and problem-solving questions",
-      cultural: "cultural fit and company values questions"
-    };
-
-    const prompt = `Generate 10 realistic ${interviewTypePrompts[data.interviewType]} for this position:
+  const data = c.req.valid("json");
+  const interviewTypePrompts = {
+    behavioral: "behavioral interview questions using the STAR method",
+    technical: "technical questions relevant to the role",
+    case: "case study and problem-solving questions",
+    cultural: "cultural fit and company values questions"
+  };
+  const prompt = `Generate 10 realistic ${interviewTypePrompts[data.interviewType]} for this position:
 
 Job Title: ${data.jobTitle}
 ${data.jobDescription ? `Job Description: ${data.jobDescription}` : ''}
@@ -379,26 +553,54 @@ Create questions that are:
 4. Realistic for actual interviews
 
 Return as a JSON array of questions: ["question1", "question2", ...]`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert interview coach and HR professional. Create realistic, challenging interview questions that help candidates prepare effectively. Always respond with valid JSON array format."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 1000,
-      temperature: 0.6,
-    });
-
-    const responseText = completion.choices[0]?.message?.content || "";
-    
-    let questions: string[];
+  const systemPrompt =
+    "You are an expert interview coach and HR professional. Create realistic, challenging interview questions that help candidates prepare effectively. Always respond with valid JSON array format.";
+  // Try Gemini first
+  const geminiParams: GeminiGenerateParams = {
+    model: "gemini-pro",
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${systemPrompt}\n\n${prompt}` }]
+      }
+    ],
+    temperature: 0.6,
+    maxOutputTokens: 1000,
+  };
+  let responseText: string = "";
+  let usedModel: string = "gemini";
+  let aiError: string | undefined = undefined;
+  const geminiResult = await callGeminiAPI(c.env, geminiParams);
+  if ("content" in geminiResult && geminiResult.content.trim()) {
+    responseText = geminiResult.content;
+  } else {
+    // Fallback to OpenAI
+    usedModel = "openai";
+    try {
+      const openai = getOpenAIClient(c.env);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 1000,
+        temperature: 0.6,
+      });
+      responseText = completion.choices[0]?.message?.content || "";
+    } catch (err: any) {
+      aiError = "Failed to start interview session";
+      responseText = "";
+    }
+  }
+  let questions: string[] = [];
+  try {
     try {
       questions = JSON.parse(responseText);
     } catch (parseError) {
@@ -435,7 +637,6 @@ Return as a JSON array of questions: ["question1", "question2", ...]`;
       };
       questions = fallbackQuestions[data.interviewType] || fallbackQuestions.behavioral;
     }
-
     // Store interview session in database
     const dbResult = await c.env.DB.prepare(
       "INSERT INTO interview_sessions (user_id, job_title, interview_type, questions, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
@@ -445,7 +646,6 @@ Return as a JSON array of questions: ["question1", "question2", ...]`;
       data.interviewType,
       JSON.stringify(questions)
     ).run();
-
     return c.json({
       id: dbResult.meta.last_row_id,
       user_id: 'user_temp',
@@ -453,6 +653,8 @@ Return as a JSON array of questions: ["question1", "question2", ...]`;
       interview_type: data.interviewType,
       questions,
       currentQuestionIndex: 0,
+      usedModel,
+      error: aiError,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -496,3 +698,6 @@ app.post("/api/interview/next-question", async (c) => {
 });
 
 export default app;
+function fetch(_arg0: string, _arg1: { method: string; headers: { "Content-Type": string; }; body: string; }) {
+  throw new Error("Function not implemented.");
+}
