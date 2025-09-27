@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { zValidator } from "@hono/zod-validator";
+import type { Env } from "./.env.d";
 import OpenAI from "openai";
+
 import {
   CreateResumeSchema,
   CreateCoverLetterSchema,
@@ -10,9 +10,10 @@ import {
   LinkedInOptimizationRequestSchema,
   StartInterviewSchema,
 } from "@/shared/types";
+import { zValidator } from "@hono/zod-validator";
+import { cors } from "hono/cors";
 
 const app = new Hono<{ Bindings: Env }>();
-
 app.use("*", cors());
 
 // Initialize OpenAI client
@@ -129,7 +130,7 @@ Create a personalized cover letter that highlights relevant experience, shows en
     const coverLetterContent = completion.choices[0]?.message?.content || "Failed to generate cover letter content";
 
     // Store in database
-    const dbResult = await c.env.DB.prepare(
+    const dbResult = await c.env.DB.prepare( 
       "INSERT INTO cover_letters (user_id, job_title, company_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
     ).bind(
       'user_temp', // TODO: Replace with actual user ID when auth is implemented
