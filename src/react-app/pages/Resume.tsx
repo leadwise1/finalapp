@@ -1,4 +1,12 @@
+// Declare global Puter.js variable for TypeScript
+declare const puter: any;
 import { useState } from 'react';
+// Helper to wait for Puter.js to be loaded
+const waitForPuter = async () => {
+  while (typeof puter === 'undefined') {
+    await new Promise(r => setTimeout(r, 50));
+  }
+};
 import { Plus, Trash2, FileText, Download, Loader2 } from 'lucide-react';
 import Layout from '@/react-app/components/Layout';
 import type { CreateResumeType } from '@/shared/types';
@@ -64,19 +72,23 @@ export default function Resume() {
   const generateResume = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/resume/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+      await waitForPuter(); // Ensure Puter.js is loaded
+
+      // Replace the fetch API call with Puter.js AI call
+      const prompt = `
+        Generate a professional resume using the following data:
+        Personal Info: ${JSON.stringify(formData.personalInfo)}
+        Experience: ${JSON.stringify(formData.experience)}
+        Education: ${JSON.stringify(formData.education)}
+        Skills: ${JSON.stringify(formData.skills)}
+        `;
+      const aiResponse = await puter.ai.chat(prompt, {
+        model: 'gpt-5-chat-latest',
+        temperature: 0.7,
+        max_tokens: 600
       });
 
-      if (!response.ok) {
-        // This block will now catch 500 errors and show the alert.
-        throw new Error('Failed to generate resume');
-      }
-
-      const result = await response.json();
-      setGeneratedResume(result.content);
+      setGeneratedResume(aiResponse);
     } catch (error) {
       console.error('Error generating resume:', error);
       alert('Failed to generate resume. Please try again.');
