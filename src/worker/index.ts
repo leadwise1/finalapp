@@ -168,7 +168,7 @@ app.post("/api/resume/generate", zValidator("json", CreateResumeSchema), async (
     return c.json({ error: aiResult.error || "Failed to generate resume content" }, 500);
   }
 
-  const dbResult = await c.env.DB.prepare(
+  const dbResult = await c.env.careerwise_db.prepare(
     "INSERT INTO resumes (user_id, title, content, formatted_content, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
   ).bind('user_temp', `${data.personalInfo.name} - Resume`, JSON.stringify(data), aiResult.content).run();
 
@@ -214,7 +214,7 @@ app.post("/api/cover-letter/generate", zValidator("json", CreateCoverLetterSchem
         return c.json({ error: aiResult.error || "Failed to generate cover letter" }, 500);
     }
 
-    const dbResult = await c.env.DB.prepare(
+    const dbResult = await c.env.careerwise_db.prepare(
         "INSERT INTO cover_letters (user_id, job_title, company_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
     ).bind('user_temp', data.jobTitle, data.companyName, aiResult.content).run();
 
@@ -375,7 +375,7 @@ app.post("/api/interview/start", zValidator("json", StartInterviewSchema), async
       "Why are you interested in this role?"
     ];
   }
-  const dbResult = await c.env.DB.prepare(
+  const dbResult = await c.env.careerwise_db.prepare(
     "INSERT INTO interview_sessions (user_id, job_title, interview_type, questions, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))"
   ).bind('user_temp', data.jobTitle, data.interviewType, JSON.stringify(questions)).run();
   return c.json({
@@ -396,18 +396,18 @@ app.post("/api/interview/start", zValidator("json", StartInterviewSchema), async
 // --- Database query endpoints (no changes needed) ---
 
 app.get("/api/resumes", async (c) => {
-  const result = await c.env.DB.prepare("SELECT * FROM resumes WHERE user_id = ? ORDER BY created_at DESC").bind('user_temp').all();
+  const result = await c.env.careerwise_db.prepare("SELECT * FROM resumes WHERE user_id = ? ORDER BY created_at DESC").bind('user_temp').all();
   return c.json(result.results);
 });
 
 app.get("/api/cover-letters", async (c) => {
-    const result = await c.env.DB.prepare("SELECT * FROM cover_letters WHERE user_id = ? ORDER BY created_at DESC").bind('user_temp').all();
+    const result = await c.env.careerwise_db.prepare("SELECT * FROM cover_letters WHERE user_id = ? ORDER BY created_at DESC").bind('user_temp').all();
     return c.json(result.results);
 });
 
 app.post("/api/interview/next-question", async (c) => {
   const { sessionId, currentQuestionIndex } = await c.req.json();
-  const session = await c.env.DB.prepare("SELECT * FROM interview_sessions WHERE id = ?").bind(sessionId).first();
+  const session = await c.env.careerwise_db.prepare("SELECT * FROM interview_sessions WHERE id = ?").bind(sessionId).first();
   if (!session) {
     return c.json({ error: "Interview session not found" }, 404);
   }

@@ -29,7 +29,7 @@
 	],
   "routes": [
     {
-      "pattern": "careerwise.letsleadwise.org/*",
+      "pattern": "careerwise.letsleadwise.org",
       "custom_domain": true
     }
   ]
