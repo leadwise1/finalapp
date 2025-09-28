@@ -1,27 +1,36 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "01997a9a-7bd6-7111-afb1-6efa798272a2",
-  "main": "./src/worker/index.ts",
-  "compatibility_date": "2025-06-17",
-  "compatibility_flags": ["nodejs_compat"],
-  "observability": {
-    "enabled": true
-  },
-  "upload_source_maps": true,
-  "assets": {
-    "not_found_handling": "single-page-application"
-  },
-  "d1_databases": [
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "careerwise-worker",
+	"main": "./src/worker/index.ts",
+	"compatibility_date": "2025-06-17",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"assets": {
+		"directory": "dist/client",
+		"not_found_handling": "single-page-application"
+	},
+	"d1_databases": [
+		{
+			"binding": "careerwise_db",
+			"database_name": "careerwise_db",
+			"database_id": "a6550909-03ce-4245-9680-efff4cfadb3d"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "careerwise_assets",
+			"bucket_name": "careerwise-assets"
+		}
+	],
+  "routes": [
     {
-      "binding": "DB",
-      "database_name": "01997a9a-7bd6-7111-afb1-6efa798272a2",
-      "database_id": "01997a9a-7bd6-7111-afb1-6efa798272a2"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "R2_BUCKET",
-      "bucket_name": "01997a9a-7bd6-7111-afb1-6efa798272a2"
+      "pattern": "careerwise.letsleadwise.org/*",
+      "custom_domain": true
     }
   ]
 }
