@@ -1,15 +1,31 @@
+// Puter.js global declaration
+declare const puter: any;
+
 import { useState } from "react";
-import { generateText } from "../utils/puterAI";
+
+// Helper to wait for Puter.js to load
+const waitForPuter = async () => {
+  while (typeof puter === 'undefined' || !puter.ai) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
 
 const ResumeGenerator = () => {
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
 
   const handleGenerate = async () => {
+    if (!input.trim()) return;
     setOutput("Generating...");
-    const prompt = `Create professional resume bullet points for the following experience:\n${input}`;
-    const aiResponse = await generateText(prompt, { model: "gpt-5-chat-latest" });
-    setOutput(aiResponse);
+    try {
+      await waitForPuter();
+      const prompt = `Create professional resume bullet points for the following experience:\n${input}`;
+      const aiResponse = await puter.ai.chat(prompt, { model: "gpt-5-chat-latest", max_tokens: 500 });
+      setOutput(aiResponse);
+    } catch (error) {
+      console.error("AI call failed:", error);
+      setOutput("Failed to generate resume. Please try again.");
+    }
   };
 
   return (
