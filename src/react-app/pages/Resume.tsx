@@ -70,7 +70,10 @@ export default function Resume() {
         body: JSON.stringify(formData),
       });
 
-      if (!response.ok) throw new Error('Failed to generate resume');
+      if (!response.ok) {
+        // This block will now catch 500 errors and show the alert.
+        throw new Error('Failed to generate resume');
+      }
 
       const result = await response.json();
       setGeneratedResume(result.content);
