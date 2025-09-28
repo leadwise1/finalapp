@@ -27,6 +27,9 @@ export default function Home() {
               <Link to="/coaching" className="text-gray-600 hover:text-purple-600 transition-colors font-medium">
                 Coaching
               </Link>
+              <Link to="/career-ai" className="text-gray-600 hover:text-purple-600 transition-colors font-medium">
+                Career AI
+              </Link>
               <Link to="#dashboard" className="text-gray-600 hover:text-purple-600 transition-colors font-medium">
                 Dashboard
               </Link>

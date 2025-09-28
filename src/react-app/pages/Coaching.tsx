@@ -1,13 +1,15 @@
-declare const puter: any;
-
 import { useState, useRef, useEffect } from 'react';
 import { Send, MessageCircle, User, Bot, Loader2 } from 'lucide-react';
 import Layout from '@/react-app/components/Layout';
 import type { CoachingMessageType } from '@/shared/types';
 
+// Declare global Puter.js variable for TypeScript
+declare const puter: any;
+
+// Helper to wait for Puter.js to load
 const waitForPuter = async () => {
   while (typeof puter === 'undefined' || !puter.ai) {
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
   }
 };
 
@@ -44,8 +46,8 @@ export default function Coaching() {
     setInputMessage('');
     setIsLoading(true);
 
+    await waitForPuter(); // Ensure Puter.js is loaded
     try {
-      await waitForPuter();
       const aiResponse = await puter.ai.chat(
         `You are Coach Leo, an empathetic AI career coach. Respond to the user’s question with practical career advice:\n\nUser: ${userMessage.content}`,
         { model: "gpt-5-chat-latest", max_tokens: 250 }
