@@ -49,9 +49,9 @@ async function callGeminiAPI(
   if (!apiKey) return { error: "Gemini API key not configured" };
 
   try {
-    // UPDATED: Changed model to the more stable 'gemini-pro'
+    // UPDATED: Changed API endpoint from v1beta to the stable v1
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey,
+      "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=" + apiKey,
       {
         method: "POST",
         headers: {
