@@ -1,38 +1,52 @@
-import { useState } from "react";
-import { generateText } from "../utils/puterAI";
+import React, { useState } from "react";
 
-const CareerCoach = () => {
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState("");
+interface CareerCoachProps {
+  question?: string; // question is optional
+}
+
+const CareerCoach: React.FC<CareerCoachProps> = ({ question }) => {
+  const [response, setResponse] = useState<string>("");
 
   const handleAsk = async () => {
-    setAnswer("Thinking...");
-    const aiResponse = await generateText(
-      `Provide personalized career advice for the following question:\n${question}`,
-      { model: "gpt-5-chat-latest", max_tokens: 250 }
-    );
-    setAnswer(aiResponse);
+    if (!question) return;
+    try {
+      // Example fetch to your AI backend (adjust URL if needed)
+      const res = await fetch("/api/career-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+
+      if (!res.ok) throw new Error("Failed to fetch AI response");
+      const data = await res.json();
+      setResponse(data.answer || "No response received.");
+    } catch (err) {
+      console.error(err);
+      setResponse("Something went wrong while fetching AI response.");
+    }
   };
 
   return (
-    <div className="p-4 mt-4">
-      <h2 className="text-xl font-bold mb-2">AI Career Coach</h2>
-      <input
-        type="text"
-        className="w-full border p-2 mb-2"
-        placeholder="Ask a career question..."
-        value={question}
-        onChange={(e) => setQuestion(e.target.value)}
-      />
+    <div className="p-6 bg-white rounded-xl shadow-md">
+      <h2 className="text-2xl font-bold mb-4 text-purple-600">Career AI Coach</h2>
+
+      {question && (
+        <p className="mb-4 text-gray-700">
+          <strong>Question:</strong> {question}
+        </p>
+      )}
+
       <button
-        className="bg-green-600 text-white px-4 py-2 rounded"
         onClick={handleAsk}
+        className="bg-gradient-to-r from-purple-600 to-violet-600 text-white px-4 py-2 rounded-lg shadow hover:from-purple-700 hover:to-violet-700 transition"
       >
-        Get Advice
+        Ask AI
       </button>
-      {answer && (
-        <div className="mt-4 p-2 border bg-gray-100 rounded whitespace-pre-line">
-          {answer}
+
+      {response && (
+        <div className="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-lg text-gray-800">
+          <strong>AI Response:</strong>
+          <p>{response}</p>
         </div>
       )}
     </div>

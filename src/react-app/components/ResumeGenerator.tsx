@@ -21,7 +21,10 @@ const ResumeGenerator = () => {
       await waitForPuter();
       const prompt = `Create professional resume bullet points for the following experience:\n${input}`;
       const aiResponse = await puter.ai.chat(prompt, { model: "gpt-5-chat-latest", max_tokens: 500 });
-      setOutput(aiResponse);
+
+      // Extract the actual text from the AI response
+      const textOutput = aiResponse?.message || aiResponse?.value || JSON.stringify(aiResponse);
+      setOutput(textOutput);
     } catch (error) {
       console.error("AI call failed:", error);
       setOutput("Failed to generate resume. Please try again.");
