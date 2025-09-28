@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FileText, Download, Loader2 } from 'lucide-react';
 import Layout from '@/react-app/components/Layout';
 import type { CreateCoverLetterType } from '@/shared/types';
+import { generateText } from '../utils/puterAI';
 
 export default function CoverLetter() {
   const [formData, setFormData] = useState<CreateCoverLetterType>({
@@ -17,16 +18,18 @@ export default function CoverLetter() {
   const generateCoverLetter = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/cover-letter/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+      const prompt = `You are an expert career coach. Write a ${formData.tone} cover letter for the following job:
+Job Title: ${formData.jobTitle}
+Company: ${formData.companyName}
+Job Description: ${formData.jobDescription}
+Personal Experience: ${formData.personalExperience}`;
+
+      const result = await generateText(prompt, {
+        model: 'gpt-5-chat-latest',
+        max_tokens: 500
       });
 
-      if (!response.ok) throw new Error('Failed to generate cover letter');
-
-      const result = await response.json();
-      setGeneratedLetter(result.content);
+      setGeneratedLetter(result);
     } catch (error) {
       console.error('Error generating cover letter:', error);
       alert('Failed to generate cover letter. Please try again.');

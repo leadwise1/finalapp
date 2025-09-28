@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, MessageCircle, User, Bot, Loader2 } from 'lucide-react';
 import Layout from '@/react-app/components/Layout';
 import type { CoachingMessageType } from '@/shared/types';
+import { generateText } from '../utils/puterAI';
 
 export default function Coaching() {
   const [messages, setMessages] = useState<CoachingMessageType[]>([
@@ -37,16 +38,18 @@ export default function Coaching() {
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/coaching/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userMessage),
-      });
+      const aiResponse = await generateText(
+        `You are Coach Leo, an empathetic AI career coach. Respond to the user’s question with practical career advice:\n\nUser: ${userMessage.content}`,
+        { model: "gpt-5-chat-latest", max_tokens: 250 }
+      );
 
-      if (!response.ok) throw new Error('Failed to get coaching response');
+      const assistantMessage: CoachingMessageType = {
+        role: "assistant",
+        content: aiResponse,
+        timestamp: new Date().toISOString(),
+      };
 
-      const result = await response.json();
-      setMessages(prev => [...prev, result]);
+      setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage: CoachingMessageType = {

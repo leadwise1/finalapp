@@ -1,4 +1,11 @@
+// Placeholder transcription function for initial build
+const transcribeAudio = async (_current: Blob[]): Promise<string> => {
+  // TODO: Replace with real transcription logic
+  return "User's spoken answer placeholder";
+};
+
 import { useState, useRef, useEffect } from 'react';
+import { generateText } from '../utils/puterAI';
 import { Play, Square, Mic, MicOff, Video, VideoOff, RotateCcw, Download, Loader2 } from 'lucide-react';
 import Layout from '@/react-app/components/Layout';
 import type { InterviewSessionType } from '@/shared/types';
@@ -52,25 +59,31 @@ export default function InterviewSimulator() {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/interview/next-question', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: interviewSession.id,
-          currentQuestionIndex: interviewSession.currentQuestionIndex,
-        }),
-      });
+      const aiPrompt = `You are an AI interview coach. Generate the next ${sessionData.interviewType} interview question for a candidate with this experience: 
+${sessionData.experience}. The job title is ${sessionData.jobTitle} and the job description is: ${sessionData.jobDescription || 'N/A'}.`;
 
-      if (!response.ok) throw new Error('Failed to get next question');
+      const aiQuestion = await generateText(aiPrompt, { model: 'gpt-5-chat-latest', max_tokens: 150 });
 
-      const result = await response.json();
-      setCurrentQuestion(result.question);
+      setCurrentQuestion(aiQuestion);
       setInterviewSession(prev => prev ? { ...prev, currentQuestionIndex: prev.currentQuestionIndex + 1 } : null);
     } catch (error) {
-      console.error('Error getting next question:', error);
-      alert('Failed to get next question. Please try again.');
+      console.error('Error generating next question:', error);
+      alert('Failed to generate next question. Please try again.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Optionally, call this after stopRecording, passing the user's answer
+  const analyzeResponse = async (userAnswer: string) => {
+    try {
+      const feedback = await generateText(
+        `You are an expert career coach. Provide constructive feedback on this candidate's answer: "${userAnswer}". Give tips to improve their response, tone, and clarity.`,
+        { model: 'gpt-5-chat-latest', max_tokens: 200 }
+      );
+      alert('AI Feedback: ' + feedback);
+    } catch (error) {
+      console.error('Error analyzing response:', error);
     }
   };
 
@@ -103,10 +116,20 @@ export default function InterviewSimulator() {
     }
   };
 
-  const stopRecording = () => {
+  // Stop recording and analyze the actual spoken answer
+  const stopRecording = async () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
+
+      // Get transcription of recorded answer
+      try {
+        const userAnswer = await transcribeAudio(recordedChunksRef.current);
+        analyzeResponse(userAnswer);
+      } catch (error) {
+        console.error('Error transcribing audio:', error);
+        alert('Failed to transcribe the recording.');
+      }
     }
   };
 

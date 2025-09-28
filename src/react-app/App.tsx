@@ -7,6 +7,7 @@ import ATSOptimizer from "@/react-app/pages/ATSOptimizer";
 import LinkedInOptimizer from "@/react-app/pages/LinkedInOptimizer";
 import InterviewSimulator from "@/react-app/pages/InterviewSimulator";
 import Templates from "@/react-app/pages/Templates";
+import AITools from "@/react-app/pages/AITools";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/linkedin-optimizer" element={<LinkedInOptimizer />} />
         <Route path="/interview-simulator" element={<InterviewSimulator />} />
         <Route path="/templates" element={<Templates />} />
+        <Route path="/ai-tools" element={<AITools />} />
       </Routes>
     </Router>
   );
